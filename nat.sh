@@ -206,6 +206,30 @@ run_autorestart_once(){
   ok "已执行一次 ✅"
 }
 
+
+show_nat_status(){
+  must_root
+  echo -e "${CYAN}容器状态${NC}"
+  echo "------------------------------------------"
+  printf "%-10s %-10s %-18s %-10s\n" "NAME" "STATE" "IPV4" "HEALTH"
+  echo "------------------------------------------"
+
+  lxc-ls -f 2>/dev/null | awk 'NR>1 {print $1, $2, $5}' | while read -r name state ipv4; do
+    [ -n "$name" ] || continue
+
+    if [[ "$state" != "RUNNING" ]]; then
+      printf "%-10s %-10s %-18s ${RED}%-10s${NC}\n" "$name" "$state" "${ipv4:-"-"}" "DOWN"
+    elif [[ -z "${ipv4:-}" || "$ipv4" == "-" ]]; then
+      printf "%-10s %-10s %-18s ${YELLOW}%-10s${NC}\n" "$name" "$state" "-" "NO-IP"
+    else
+      printf "%-10s %-10s %-18s ${GREEN}%-10s${NC}\n" "$name" "$state" "$ipv4" "OK"
+    fi
+  done
+
+  echo "------------------------------------------"
+}
+
+
 menu_autorestart(){
   while true; do
     clear
@@ -213,7 +237,7 @@ menu_autorestart(){
     echo "------------------------" >&2
     echo "1) 安装服务" >&2
     echo "2) 立即执行" >&2
-    echo "3) 查看服务状态" >&2
+    echo "3) 查看容器状态" >&2
     echo "0) 返回" >&2
     echo "------------------------" >&2
     read -rp "请选择 [0-3]：" c
@@ -228,7 +252,7 @@ menu_autorestart(){
         read -rp "回车继续..." _
         ;;
       3)
-        systemctl status lxc-autostart-onboot.service --no-pager || true
+        show_nat_status
         read -rp "回车继续..." _
         ;;
       0)

@@ -210,15 +210,27 @@ menu_autorestart(){
     echo "------------------------" >&2
     read -rp "请选择 [0-2]：" c
     case "$c" in
-      1) install_autorestart_service ;;
-      2) run_autorestart_once ;;
-      0) return 0 ;;
-      *) warn "输入无效"; sleep 1 ;;
+      1)
+        install_autorestart_service
+        echo
+        read -rp "回车继续..." _
+        ;;
+      2)
+        run_autorestart_once
+        echo
+        read -rp "回车继续..." _
+        ;;
+      0)
+        return 0
+        ;;
+      *)
+        warn "输入无效"
+        sleep 1
+        ;;
     esac
-    echo
-    read -rp "回车继续..." _
   done
 }
+
 
 # ========== 菜单3：执行 NAT 调优 ==========
 nat_tuning(){

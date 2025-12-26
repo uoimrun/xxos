@@ -209,25 +209,18 @@ menu_autorestart(){
     echo "0) 返回" >&2
     echo "------------------------" >&2
     read -rp "请选择 [0-2]：" c
-    case "$c" in
-      1)
-        install_autorestart_service
-        echo
-        read -rp "回车继续..." _
-        ;;
-      2)
-        run_autorestart_once
-        echo
-        read -rp "回车继续..." _
-        ;;
-      0)
-        return 0
-        ;;
-      *)
-        warn "输入无效"
-        sleep 1
-        ;;
-    esac
+   case "$c" in
+   1)
+    fix_nat_cgroup
+    read -rp "回车继续..." _
+    ;;
+   2)
+    menu_autorestart
+    ;;
+   0)
+    exit 0
+    ;;
+   esac
   done
 }
 
@@ -237,7 +230,7 @@ nat_tuning(){
   must_root
   local PM; PM=$(pm)
   ensure_pkg "$PM" curl curl || true
-  bash <(curl -fsSL https://raw.githubusercontent.com/nuro-hia/tuning/main/install.sh) >/dev/null 2>&1 || true
+  bash <(curl -fsSL https://raw.githubusercontent.com/nuro-hia/tuning/main/install.sh)
   ok "NAT 调优执行完成 ✅"
 }
 

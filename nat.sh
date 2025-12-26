@@ -140,22 +140,27 @@ install_autorestart_service(){
   ensure_pkg "$PM" lxc lxc-start
   ensure_pkg "$PM" lxc lxc-stop
 
-  info "安装 systemd 自动重启服务..."
+  info "安装 systemd 自动重启服务（未运行则重启）..."
 
   cat > /usr/local/bin/lxc-autostart-onboot.sh <<'EOF'
 #!/usr/bin/env bash
 set -u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# 等网络、网桥起来
 sleep 8
 
+# 只看 IPV4：没IP就 stop/start
 lxc-ls -f 2>/dev/null | awk 'NR>1 {print $1, $5}' | while read -r name ipv4; do
   [ -n "$name" ] || continue
 
   if [ -z "${ipv4:-}" ] || [ "$ipv4" = "-" ]; then
+    echo "[AUTO] $name no-ip => restart"
     lxc-stop -n "$name" -k >/dev/null 2>&1 || true
     sleep 1
     lxc-start -n "$name" -d >/dev/null 2>&1 || true
+  else
+    echo "[AUTO] $name ok ip=$ipv4"
   fi
 done
 EOF
@@ -170,6 +175,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/lxc-autostart-onboot.sh
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -178,24 +185,24 @@ EOF
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable lxc-autostart-onboot.service >/dev/null 2>&1 || true
 
-  echo installed > "$AUTORESTART_MARKER"
-  ok "安装完成 ✅ 已设置开机自启"
+  o ok "安装完成 ✅ 已设置开机自启"
 
+  # 可选：立刻跑一次
   read -rp "是否立刻执行一次检测并重启未运行容器? [Y/n]：" RUNNOW
   RUNNOW="${RUNNOW:-Y}"
   if [[ "$RUNNOW" =~ ^[Yy]$ ]]; then
-    systemctl start lxc-autostart-onboot.service >/dev/null 2>&1 || true
+    systemctl start lxc-autostart-onboot.service || true
     ok "已执行一次 ✅"
   fi
 }
 
 run_autorestart_once(){
   must_root
-  if [ ! -f "$AUTORESTART_MARKER" ]; then
-    warn "未安装自动重启服务，请先选 1 安装"
+  if ! systemctl list-unit-files | grep -q '^lxc-autostart-onboot.service'; then
+    warn "未检测到 systemd 服务，请先选 1 安装服务"
     return 0
   fi
-  systemctl start lxc-autostart-onboot.service >/dev/null 2>&1 || true
+  systemctl start lxc-autostart-onboot.service || true
   ok "已执行一次 ✅"
 }
 
@@ -206,21 +213,32 @@ menu_autorestart(){
     echo "------------------------" >&2
     echo "1) 安装服务" >&2
     echo "2) 立即执行" >&2
+    echo "3) 查看服务状态" >&2
     echo "0) 返回" >&2
     echo "------------------------" >&2
-    read -rp "请选择 [0-2]：" c
-   case "$c" in
-   1)
-    fix_nat_cgroup
-    read -rp "回车继续..." _
-    ;;
-   2)
-    menu_autorestart
-    ;;
-   0)
-    exit 0
-    ;;
-   esac
+    read -rp "请选择 [0-3]：" c
+
+    case "$c" in
+      1)
+        install_autorestart_service
+        read -rp "回车继续..." _
+        ;;
+      2)
+        run_autorestart_once
+        read -rp "回车继续..." _
+        ;;
+      3)
+        systemctl status lxc-autostart-onboot.service --no-pager || true
+        read -rp "回车继续..." _
+        ;;
+      0)
+        return 0
+        ;;
+      *)
+        warn "输入无效"
+        sleep 1
+        ;;
+    esac
   done
 }
 

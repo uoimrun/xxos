@@ -68,19 +68,18 @@ fix_nat_memory(){
   detect_os
   local PM; PM=$(pm)
 
-  if [ -f "$CGROUP_MARKER" ]; then
-    ok "已修复过：$CGROUP_MARKER"
-    warn "如需重做：rm -f $CGROUP_MARKER"
-    return 0
-  fi
-
   local cg
   cg=$(stat -fc %T /sys/fs/cgroup 2>/dev/null || echo "")
 
   info "系统: $OS_ID $OS_VER"
   info "cgroup: $cg"
 
-  # Debian
+  if [ -f "$CGROUP_MARKER" ] && [ "$cg" != "cgroup2fs" ]; then
+    ok "已修复且已生效 ✅ ($cg)"
+    return 0
+  fi
+
+  # ---- Debian ----
   if [ -f /etc/debian_version ]; then
     local mem_enabled
     mem_enabled=$(awk '$1=="memory"{print $4}' /proc/cgroups 2>/dev/null || echo "0")
@@ -102,7 +101,7 @@ fix_nat_memory(){
 
       update-grub >/dev/null 2>&1 || true
       echo fixed > "$CGROUP_MARKER"
-      ok "修复完成 ✅ 需要 reboot 生效"
+      ok "修复完成 ✅ 必须 reboot 生效"
     else
       ok "memory cgroup 已启用 ✅"
       echo fixed > "$CGROUP_MARKER"
@@ -110,14 +109,16 @@ fix_nat_memory(){
     return 0
   fi
 
-  # EL9 Alma/Rocky/RHEL9
+  # ---- EL9 ----
   if [[ "$OS_ID" =~ (almalinux|rocky|rhel|centos) ]] && [[ "${OS_VER:-0}" =~ ^9 ]]; then
     if [ "$cg" = "cgroup2fs" ]; then
       info "写 grubby 参数：systemd.unified_cgroup_hierarchy=0 cgroup_enable=memory swapaccount=1"
+
       ensure_pkg "$PM" grubby grubby
       grubby --update-kernel=ALL --args="systemd.unified_cgroup_hierarchy=0 cgroup_enable=memory swapaccount=1" >/dev/null 2>&1 || true
+
       echo fixed > "$CGROUP_MARKER"
-      ok "修复完成 ✅ 需要 reboot 生效"
+      ok "修复完成 ✅ 必须 reboot 生效"
     else
       ok "当前不是 cgroup2fs，可能已是 v1 ✅"
       echo fixed > "$CGROUP_MARKER"
@@ -127,6 +128,7 @@ fix_nat_memory(){
 
   warn "不支持系统：$OS_ID"
 }
+
 
 # ========== 菜单2：自动重启容器（子菜单） ==========
 install_autorestart_service(){

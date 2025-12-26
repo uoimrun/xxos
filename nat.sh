@@ -209,25 +209,26 @@ run_autorestart_once(){
 
 show_nat_status(){
   must_root
-  echo -e "${CYAN}容器状态${NC}"
+  echo -e "${CYAN}NAT 容器状态${NC}"
   echo "------------------------------------------"
-  printf "%-10s %-10s %-18s %-10s\n" "NAME" "STATE" "IPV4" "HEALTH"
+  printf "%-10s %-18s %-10s\n" "NAME" "IPV4" "STATE"
   echo "------------------------------------------"
 
-  lxc-ls -f 2>/dev/null | awk 'NR>1 {print $1, $2, $5}' | while read -r name state ipv4; do
+  lxc-ls -f 2>/dev/null | awk 'NR>1 {print $1, $5}' | while read -r name ipv4; do
     [ -n "$name" ] || continue
 
-    if [[ "$state" != "RUNNING" ]]; then
-      printf "%-10s %-10s %-18s ${RED}%-10s${NC}\n" "$name" "$state" "${ipv4:-"-"}" "DOWN"
-    elif [[ -z "${ipv4:-}" || "$ipv4" == "-" ]]; then
-      printf "%-10s %-10s %-18s ${YELLOW}%-10s${NC}\n" "$name" "$state" "-" "NO-IP"
+    if [[ -z "${ipv4:-}" || "$ipv4" == "-" ]]; then
+      # 没IP
+      printf "%-10s %-18s ${RED}%-10s${NC}\n" "$name" "-" "未运行"
     else
-      printf "%-10s %-10s %-18s ${GREEN}%-10s${NC}\n" "$name" "$state" "$ipv4" "OK"
+      # 有IP
+      printf "%-10s %-18s ${GREEN}%-10s${NC}\n" "$name" "$ipv4" "运行中"
     fi
   done
 
   echo "------------------------------------------"
 }
+
 
 
 menu_autorestart(){

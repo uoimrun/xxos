@@ -184,7 +184,7 @@ EOF
   read -rp "是否立刻执行一次检测并重启未运行容器? [Y/n]：" RUNNOW
   RUNNOW="${RUNNOW:-Y}"
   if [[ "$RUNNOW" =~ ^[Yy]$ ]]; then
-    systemctl start lxc-autostart-onboot.service
+    systemctl start lxc-autostart-onboot.service >/dev/null 2>&1 || true
     ok "已执行一次 ✅"
   fi
 }
@@ -195,7 +195,7 @@ run_autorestart_once(){
     warn "未安装自动重启服务，请先选 1 安装"
     return 0
   fi
-  systemctl start lxc-autostart-onboot.service
+  systemctl start lxc-autostart-onboot.service >/dev/null 2>&1 || true
   ok "已执行一次 ✅"
 }
 

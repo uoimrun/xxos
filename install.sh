@@ -3,6 +3,8 @@ set -euo pipefail
 
 MARKER="/root/.vt_onekey.marker"
 CGROUP_MARKER="/root/.vt_cgroup_fixed.marker"
+DEB_CGROUP_MARKER="/root/.vt_deb_cgroup_fixed.marker"
+
 
 DEFAULT_IMG="/lxcdisk.img"
 DEFAULT_SIZE_GB="50"

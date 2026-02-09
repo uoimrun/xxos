@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ==============================================================================
+# Virtualizor NAT 工具箱 (修复版)
+# ==============================================================================
+
 CGROUP_MARKER="/root/.nat_cgroup_fixed.marker"
 AUTORESTART_MARKER="/root/.nat_autorestart_installed.marker"
 
@@ -44,7 +48,7 @@ detect_os(){
 ensure_pkg(){
   local PM="$1" PKG="$2" CMD="${3:-}"
   if [ -n "$CMD" ] && have "$CMD"; then
-    ok "依赖已存在：$CMD"
+    # ok "依赖已存在：$CMD"
     return 0
   fi
   info "安装依赖：$PKG"
@@ -130,7 +134,7 @@ fix_nat_memory(){
 }
 
 
-# ========== 菜单2：自动重启容器（子菜单） ==========
+# ========== 菜单2：自动重启容器 ==========
 install_autorestart_service(){
   must_root
   local PM; PM=$(pm)
@@ -140,36 +144,43 @@ install_autorestart_service(){
   ensure_pkg "$PM" lxc lxc-start
   ensure_pkg "$PM" lxc lxc-stop
 
-  info "安装 systemd 自动重启服务（未运行则重启）..."
+  info "正在安装/更新 systemd 自动重启服务..."
 
   cat > /usr/local/bin/lxc-autostart-onboot.sh <<'EOF'
 #!/usr/bin/env bash
 set -u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# 等网络、网桥起来
-sleep 8
+echo "[AUTO] Waiting for network settlement..."
+sleep 15
 
-# 只看 IPV4：没IP就 stop/start
-lxc-ls -f 2>/dev/null | awk 'NR>1 {print $1, $5}' | while read -r name ipv4; do
+# 2. 精准遍历：只获取 名字、状态、IPV4
+# 格式化输出防止列错位
+lxc-ls --fancy --fancy-format name,state,ipv4 | awk 'NR>1 {print $1, $2, $3}' | while read -r name state ipv4; do
   [ -n "$name" ] || continue
 
+  if [ "$state" != "RUNNING" ]; then
+    continue
+  fi
+
   if [ -z "${ipv4:-}" ] || [ "$ipv4" = "-" ]; then
-    echo "[AUTO] $name no-ip => restart"
+    echo "[AUTO] Container $name is RUNNING but has no IP. Restarting..."
     lxc-stop -n "$name" -k >/dev/null 2>&1 || true
-    sleep 1
+    sleep 2
     lxc-start -n "$name" -d >/dev/null 2>&1 || true
+    echo "[AUTO] $name restarted."
   else
-    echo "[AUTO] $name ok ip=$ipv4"
+    echo "[AUTO] Container $name is OK ($ipv4)."
   fi
 done
 EOF
   chmod +x /usr/local/bin/lxc-autostart-onboot.sh
 
+  # 写入 Systemd 服务
   cat > /etc/systemd/system/lxc-autostart-onboot.service <<'EOF'
 [Unit]
 Description=Auto restart LXC containers without IPv4 on boot
-After=network-online.target
+After=network-online.target virtualizor.service lxc.service
 Wants=network-online.target
 
 [Service]
@@ -177,6 +188,8 @@ Type=oneshot
 ExecStart=/usr/local/bin/lxc-autostart-onboot.sh
 StandardOutput=journal
 StandardError=journal
+# 允许脚本执行较长时间
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
@@ -185,60 +198,65 @@ EOF
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable lxc-autostart-onboot.service >/dev/null 2>&1 || true
 
-  o ok "安装完成 ✅ 已设置开机自启"
+  ok "自动重启服务已安装 ✅ "
 
-  # 可选：立刻跑一次
-  read -rp "是否立刻执行一次检测并重启未运行容器? [Y/n]：" RUNNOW
+  read -rp "是否立刻执行一次检测? [Y/n]：" RUNNOW
   RUNNOW="${RUNNOW:-Y}"
   if [[ "$RUNNOW" =~ ^[Yy]$ ]]; then
-    systemctl start lxc-autostart-onboot.service || true
-    ok "已执行一次 ✅"
+    /usr/local/bin/lxc-autostart-onboot.sh || true
+    ok "执行完毕"
   fi
 }
 
 run_autorestart_once(){
   must_root
-  if ! systemctl list-unit-files | grep -q '^lxc-autostart-onboot.service'; then
-    warn "未检测到 systemd 服务，请先选 1 安装服务"
+  if [ ! -f /usr/local/bin/lxc-autostart-onboot.sh ]; then
+    warn "脚本未安装，请先选择安装服务"
     return 0
   fi
-  systemctl start lxc-autostart-onboot.service || true
-  ok "已执行一次 ✅"
+  info "手动触发检测..."
+  /usr/local/bin/lxc-autostart-onboot.sh || true
+  ok "检测完成 ✅"
 }
 
 
 show_nat_status(){
   must_root
-  echo -e "${CYAN}NAT 容器状态${NC}"
-  echo "------------------------------------------"
-  printf "%-10s %-18s %-10s\n" "NAME" "IPV4" "STATE"
-  echo "------------------------------------------"
+  echo -e "${CYAN}NAT 容器状态概览${NC}"
+  echo "--------------------------------------------------------"
+  printf "%-15s %-10s %-20s\n" "NAME" "STATE" "IPV4"
+  echo "--------------------------------------------------------"
 
-  lxc-ls -f 2>/dev/null | awk 'NR>1 {print $1, $5}' | while read -r name ipv4; do
+  lxc-ls --fancy --fancy-format name,state,ipv4 | awk 'NR>1 {print $1, $2, $3}' | while read -r name state ipv4; do
     [ -n "$name" ] || continue
 
-    if [[ -z "${ipv4:-}" || "$ipv4" == "-" ]]; then
-      # 没IP
-      printf "%-10s %-18s ${RED}%-10s${NC}\n" "$name" "-" "未运行"
+    COLOR="$NC"
+    if [ "$state" = "RUNNING" ]; then
+      if [ -z "${ipv4:-}" ] || [ "$ipv4" = "-" ]; then
+        COLOR="$RED" 
+        ipv4="NO-IP (Error)"
+      else
+        COLOR="$GREEN" 
+      fi
     else
-      # 有IP
-      printf "%-10s %-18s ${GREEN}%-10s${NC}\n" "$name" "$ipv4" "运行中"
+      COLOR="$YELLOW"
+      ipv4="-"
     fi
+
+    printf "${COLOR}%-15s %-10s %-20s${NC}\n" "$name" "$state" "$ipv4"
   done
-
-  echo "------------------------------------------"
+  echo "--------------------------------------------------------"
 }
-
 
 
 menu_autorestart(){
   while true; do
     clear
-    echo -e "${GREEN}自动重启NAT容器${NC}" >&2
+    echo -e "${GREEN}自动重启 NAT 无网容器 (修复版)${NC}" >&2
     echo "------------------------" >&2
-    echo "1) 安装服务" >&2
-    echo "2) 立即执行" >&2
-    echo "3) 查看容器状态" >&2
+    echo "1) 安装/修复 守护服务 (Fix)" >&2
+    echo "2) 立即手动执行一次" >&2
+    echo "3) 查看容器详细状态" >&2
     echo "0) 返回" >&2
     echo "------------------------" >&2
     read -rp "请选择 [0-3]：" c
@@ -314,7 +332,7 @@ menu(){
     echo -e "${GREEN}NAT 工具脚本（Debian / AlmaLinux）${NC}" >&2
     echo "-------------------------------------------" >&2
     echo "1) 修复 NAT 内存限制" >&2
-    echo "2) 安装 自动重启nat容器" >&2
+    echo "2) 自动重启无网容器" >&2
     echo "3) 执行 NAT 调优" >&2
     echo "4) 下载 Debian 模板" >&2
     echo "5) NAT 映射管理" >&2

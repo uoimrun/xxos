@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ==============================================================================
-# Virtualizor NAT 工具箱 (修复版)
+# Virtualizor NAT 工具箱
 # ==============================================================================
 
 CGROUP_MARKER="/root/.nat_cgroup_fixed.marker"
@@ -154,15 +154,16 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 echo "[AUTO] Waiting for network settlement..."
 sleep 15
 
-# 2. 精准遍历：只获取 名字、状态、IPV4
-# 格式化输出防止列错位
 lxc-ls --fancy --fancy-format name,state,ipv4 | awk 'NR>1 {print $1, $2, $3}' | while read -r name state ipv4; do
   [ -n "$name" ] || continue
+  
+  ipv4="${ipv4%,}"
 
   if [ "$state" != "RUNNING" ]; then
     continue
   fi
 
+  # 检测无 IP
   if [ -z "${ipv4:-}" ] || [ "$ipv4" = "-" ]; then
     echo "[AUTO] Container $name is RUNNING but has no IP. Restarting..."
     lxc-stop -n "$name" -k >/dev/null 2>&1 || true
@@ -176,7 +177,6 @@ done
 EOF
   chmod +x /usr/local/bin/lxc-autostart-onboot.sh
 
-  # 写入 Systemd 服务
   cat > /etc/systemd/system/lxc-autostart-onboot.service <<'EOF'
 [Unit]
 Description=Auto restart LXC containers without IPv4 on boot
@@ -188,7 +188,6 @@ Type=oneshot
 ExecStart=/usr/local/bin/lxc-autostart-onboot.sh
 StandardOutput=journal
 StandardError=journal
-# 允许脚本执行较长时间
 TimeoutStartSec=300
 
 [Install]
@@ -197,8 +196,7 @@ EOF
 
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable lxc-autostart-onboot.service >/dev/null 2>&1 || true
-
-  ok "自动重启服务已安装 ✅ "
+  ok "自动重启服务已安装 ✅"
 
   read -rp "是否立刻执行一次检测? [Y/n]：" RUNNOW
   RUNNOW="${RUNNOW:-Y}"
@@ -219,7 +217,7 @@ run_autorestart_once(){
   ok "检测完成 ✅"
 }
 
-
+# ========== 状态显示==========
 show_nat_status(){
   must_root
   echo -e "${CYAN}NAT 容器状态概览${NC}"
@@ -230,13 +228,15 @@ show_nat_status(){
   lxc-ls --fancy --fancy-format name,state,ipv4 | awk 'NR>1 {print $1, $2, $3}' | while read -r name state ipv4; do
     [ -n "$name" ] || continue
 
+    ipv4="${ipv4%,}"
+
     COLOR="$NC"
     if [ "$state" = "RUNNING" ]; then
       if [ -z "${ipv4:-}" ] || [ "$ipv4" = "-" ]; then
-        COLOR="$RED" 
+        COLOR="$RED"
         ipv4="NO-IP (Error)"
       else
-        COLOR="$GREEN" 
+        COLOR="$GREEN"
       fi
     else
       COLOR="$YELLOW"
@@ -252,9 +252,9 @@ show_nat_status(){
 menu_autorestart(){
   while true; do
     clear
-    echo -e "${GREEN}自动重启 NAT 无网容器 (修复版)${NC}" >&2
+    echo -e "${GREEN}自动重启 NAT 无网容器${NC}" >&2
     echo "------------------------" >&2
-    echo "1) 安装/修复 守护服务 (Fix)" >&2
+    echo "1) 安装守护服务" >&2
     echo "2) 立即手动执行一次" >&2
     echo "3) 查看容器详细状态" >&2
     echo "0) 返回" >&2

@@ -335,63 +335,68 @@ nat_audit_logic() {
     
     [ -f "$HAPROXY_CONF" ] || { fail "未找到 HAProxy 配置文件"; return 1; }
 
-    echo -e "${CYAN}NAT 端口逻辑审计 (精准行修复)${NC}"
+    echo -e "${CYAN}NAT 端口逻辑审计${NC}"
     read -rp "请输入起始端口 (默认 40001): " START_PORT
     START_PORT="${START_PORT:-40001}"
     read -rp "请输入端口步长 (默认 20): " STEP
     STEP="${STEP:-20}"
     
-    # 建立一个干净的临时文件进行修改
-    local WORKING_CONF
-    WORKING_CONF=$(mktemp)
+    local WORKING_CONF=$(mktemp)
     cp "$HAPROXY_CONF" "$WORKING_CONF"
-
     local CHANGES=""
     local HAS_CHANGE=false
 
-    info "正在比对逻辑: IP 100-125 | 起始 $START_PORT | 步长 $STEP"
+    info "正在进行深度审计..."
 
+    # 1. 预处理：先干掉导致 WARNING 的 option tcplog (可选)
+    sed -i '/option tcplog/d' "$WORKING_CONF"
+
+    # 2. 核心校验逻辑
     for i in $(seq 100 125); do
         local TARGET_IP="${IP_PREFIX}$i"
         local P_START=$(( START_PORT + (i - 100) * STEP ))
         local P_END=$(( P_START + STEP - 1 ))
         
+        # 扫描所有涉及该 IP 段端口的行
+        # 使用 grep 定位行号，避免全表扫描
+        local TARGET_LINES=$(grep -nE "(_[0-9]{4,5}|:[0-9]{4,5})" "$WORKING_CONF" || true)
+        
         for port in $(seq "$P_START" "$P_END"); do
-            # 仅在包含该端口的行中查找 IP
-            # 搜索包含 _port 或 :port 的行，并提取其中的 10.0.0.x
-            local ACTUAL_IP
-            ACTUAL_IP=$(grep -E "(_${port}\b|:${port}\b)" "$WORKING_CONF" | grep -oP "10\.0\.0\.\d{1,3}" | head -n 1 || true)
+            # 精准定位：包含 _port 或 :port 的行号
+            local LINE_NUMS=$(echo "$TARGET_LINES" | grep -E "(_${port}|:${port})($|[^0-9])" | cut -d: -f1)
             
-            if [ -n "$ACTUAL_IP" ] && [ "$ACTUAL_IP" != "$TARGET_IP" ]; then
-                CHANGES+="${YELLOW}端口 $port:${NC} $ACTUAL_IP -> ${GREEN}$TARGET_IP${NC}\n"
-                # 【精准修复】仅对包含该端口的行执行 IP 替换，防止误伤全局
-                sed -i "/[_\b:]${port}\b/s/$ACTUAL_IP/$TARGET_IP/g" "$WORKING_CONF"
-                HAS_CHANGE=true
-            fi
+            for line_num in $LINE_NUMS; do
+                local CURRENT_LINE=$(sed -n "${line_num}p" "$WORKING_CONF")
+                local ACTUAL_IP=$(echo "$CURRENT_LINE" | grep -oP "10\.0\.0\.\d{1,3}" | head -n 1 || true)
+                
+                if [ -n "$ACTUAL_IP" ] && [ "$ACTUAL_IP" != "$TARGET_IP" ]; then
+                    CHANGES+="${YELLOW}行 $line_num (端口 $port):${NC} $ACTUAL_IP -> ${GREEN}$TARGET_IP${NC}\n"
+                    sed -i "${line_num}s/$ACTUAL_IP/$TARGET_IP/g" "$WORKING_CONF"
+                    HAS_CHANGE=true
+                fi
+            done
         done
     done
 
+    # 3. 结果处理
     if [ "$HAS_CHANGE" = false ]; then
         ok "配置逻辑完美，未发现偏差。"
         rm -f "$WORKING_CONF"
     else
-        echo -e "${YELLOW}发现以下逻辑冲突：${NC}"
+        echo -e "${YELLOW}发现以下映射冲突：${NC}"
         echo -e "$CHANGES" | column -t
         echo "-------------------------------------------"
-        read -rp "是否应用矫正? [y/N]: " CONFIRM
+        read -rp "是否应用矫正并重启服务? [y/N]: " CONFIRM
         if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
             local BAK_FILE="${HAPROXY_CONF}.bak_$(date +%H%M%S)"
-            cp "$HAPROXY_CONF" "$BAK_FILE" # 物理备份
-            
-            # 覆盖原文件
+            cp "$HAPROXY_CONF" "$BAK_FILE"
             cat "$WORKING_CONF" > "$HAPROXY_CONF"
             
-            # 语法检查
             if haproxy -c -f "$HAPROXY_CONF" > /dev/null 2>&1; then
                 systemctl restart haproxy
-                ok "矫正成功！备份见 $BAK_FILE"
+                ok "矫正成功！已修复并清理冗余警告。"
             else
-                fail "检测到语法错误！已自动回滚。"
+                fail "检测到语法错误（可能是旧配置残留导致），已自动回滚！"
                 cat "$BAK_FILE" > "$HAPROXY_CONF"
                 systemctl restart haproxy
             fi

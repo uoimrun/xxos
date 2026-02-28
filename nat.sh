@@ -326,6 +326,74 @@ nat_manage(){
   bash <(curl -fsSL https://raw.githubusercontent.com/nixore-run/nix-nat/refs/heads/main/nat.sh)
 }
 
+
+# ========== 菜单6：NAT 端口映射审计与矫正 ==========
+nat_audit_logic() {
+    must_root
+    local HAPROXY_CONF="/etc/haproxy/haproxy.cfg"
+    local START_PORT=40001
+    local IP_PREFIX="10.0.0."
+    
+    [ -f "$HAPROXY_CONF" ] || { fail "未找到 HAProxy 配置文件"; return 1; }
+
+    echo -e "${CYAN}NAT 端口逻辑审计${NC}"
+    read -rp "请输入每个 IP 分配的端口步长 (默认 20): " STEP
+    STEP="${STEP:-20}"
+    
+    info "正在读取配置并比对理论逻辑 (Range: 10.0.0.100 - 125)..."
+    
+    local TEMP_CONF
+    TEMP_CONF=$(cat "$HAPROXY_CONF")
+    local CHANGES=""
+    local HAS_CHANGE=false
+
+    # 逻辑审计循环
+    for i in $(seq 100 125); do
+        local TARGET_IP="${IP_PREFIX}$i"
+        local P_START=$(( START_PORT + (i - 100) * STEP ))
+        local P_END=$(( P_START + STEP - 1 ))
+        
+        # 针对该 IP 段内的每一个端口进行特征扫描
+        for port in $(seq "$P_START" "$P_END"); do
+            # 提取当前配置文件中该端口对应的 IP (支持 backend_IP_PORT 或 server IP:PORT 格式)
+            local ACTUAL_IP
+            ACTUAL_IP=$(echo "$TEMP_CONF" | grep -oP "10\.0\.0\.\d{1,3}(?=:?${port}\b|.*_${port}\b)" | head -n 1 || true)
+            
+            if [ -z "$ACTUAL_IP" ]; then continue; fi
+
+            if [ "$ACTUAL_IP" != "$TARGET_IP" ]; then
+                CHANGES+="${YELLOW}端口 $port:${NC} [原] $ACTUAL_IP -> ${GREEN}[新] $TARGET_IP${NC}\n"
+                # 在临时变量中执行替换
+                TEMP_CONF=$(echo "$TEMP_CONF" | sed "s/\([_ :]\)$ACTUAL_IP\([_ :]\)\(.*\)\(_$port\|:$port\)/\1$TARGET_IP\2\3\4/g")
+                HAS_CHANGE=true
+            fi
+        done
+    done
+
+    if [ "$HAS_CHANGE" = false ]; then
+        ok "配置逻辑完美，未发现偏差。"
+    else
+        echo -e "${YELLOW}发现以下逻辑冲突：${NC}"
+        echo -e "$CHANGES"
+        echo "-------------------------------------------"
+        read -rp "是否应用以上矫正并重启 HAProxy? [y/N]: " CONFIRM
+        if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+            cp "$HAPROXY_CONF" "${HAPROXY_CONF}.bak_$(date +%M%S)"
+            echo "$TEMP_CONF" > "$HAPROXY_CONF"
+            
+            if haproxy -c -f "$HAPROXY_CONF" >/dev/null 2>&1; then
+                systemctl restart haproxy
+                ok "矫正成功生效！"
+            else
+                fail "配置文件语法错误，已尝试回滚！"
+                cp "${HAPROXY_CONF}.bak_*" "$HAPROXY_CONF"
+            fi
+        else
+            info "已取消操作。"
+        fi
+    fi
+}
+
 menu(){
   while true; do
     clear
@@ -336,6 +404,7 @@ menu(){
     echo "3) 执行 NAT 调优" >&2
     echo "4) 下载 Debian 模板" >&2
     echo "5) NAT 映射管理" >&2
+    echo "6) NAT 端口审计与矫正" >&2
     echo "0) 退出" >&2
     echo "-------------------------------------------" >&2
     read -rp "请选择 [0-5]：" c
@@ -345,6 +414,7 @@ menu(){
       3) nat_tuning ;;
       4) download_tpl ;;
       5) nat_manage ;;
+      6) nat_audit_logic ;; 
       0) exit 0 ;;
       *) warn "输入无效"; sleep 1 ;;
     esac
